@@ -1,0 +1,33 @@
+name: Create Release
+
+# Stage 1 of 2: when a version tag (vX.Y.Z) is pushed, open a GitHub Release for it.
+# The build workflow (build.yml) then fires on the "release created" event and
+# attaches the macOS + Windows installers.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create the GitHub Release
+        # NOTE: a release created with the default GITHUB_TOKEN does NOT trigger the
+        # "release" event that build.yml listens for (GitHub blocks this to avoid loops).
+        # Add a Personal Access Token secret named RELEASE_PAT (contents: write) for the
+        # tag -> release -> build chain to run automatically. Without it, the release is
+        # still created — just create releases from the GitHub UI to kick off the builds.
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes
