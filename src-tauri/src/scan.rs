@@ -580,10 +580,19 @@ fn compute_confidence(groups: &mut [DuplicateGroup], folder_groups: &[FolderDupl
         }
         signals.push(ConfidenceSignal { name: "Timestamp match".into(), score: ts_score, weight: 0.20, detail: ts_detail });
 
-        // 4 — path proximity (0.10)
+        // 4 — path proximity (0.10). Use OS-correct components so Windows '\' paths
+        // and drive prefixes are handled, not just POSIX '/'.
         let path_components: Vec<Vec<String>> = folders
             .iter()
-            .map(|f| f.split('/').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect())
+            .map(|f| {
+                Path::new(f)
+                    .components()
+                    .filter_map(|c| match c {
+                        std::path::Component::Normal(s) => Some(s.to_string_lossy().to_string()),
+                        _ => None,
+                    })
+                    .collect()
+            })
             .collect();
         let min_depth = path_components.iter().map(|c| c.len()).min().unwrap_or(0);
         let mut common_depth = 0;

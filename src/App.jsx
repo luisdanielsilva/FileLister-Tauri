@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { api, onProgress, pickFolders, pickDestination, formatBytes, baseName } from "./api";
+import { api, onProgress, pickFolders, pickDestination, formatBytes, baseName, joinPath } from "./api";
 import { Icon } from "./icons";
 import { FileGroups } from "./views/FileGroups";
 import { FolderGroups, DiffSheet } from "./views/FolderGroups";
@@ -280,7 +280,7 @@ export default function App() {
     if (safeMerge) {
       let parent = safeMergeDest;
       if (!parent) { parent = await pickDestination(); if (!parent) return null; setSafeMergeDest(parent); }
-      const dest = `${parent}/${computeMergedName(group)}`;
+      const dest = joinPath(parent, computeMergedName(group));
       const res = await api.safeMerge(group, dest);
       if (res.log_path) setLastLogPath(res.log_path);
       pushUndo({ title: `Copy merge → ${res.result_name}`, created: [res.created] });

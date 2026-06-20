@@ -1,4 +1,4 @@
-import { baseName } from "./api";
+import { baseName, isUnder } from "./api";
 
 const ACROSS = "__across__";
 
@@ -7,7 +7,7 @@ const ACROSS = "__across__";
 function owningRoot(paths, roots) {
   const set = new Set();
   for (const p of paths) {
-    const matches = roots.filter((r) => p === r || p.startsWith(r + "/"));
+    const matches = roots.filter((r) => isUnder(p, r));
     if (matches.length) {
       const best = matches.reduce((a, b) => (b.length > a.length ? b : a));
       set.add(best);

@@ -260,17 +260,20 @@ fn export_keepers(keepers: Vec<PhotoInfo>, dest: String, roots: Vec<String>) -> 
     let mut created = Vec::new();
     let mut entries = Vec::new();
     for k in &keepers {
-        // path relative to its scanned root, prefixed by the root folder name
+        // Path relative to its scanned root, prefixed by the root folder name.
+        // Path::starts_with/strip_prefix are component-wise and OS-correct (handles
+        // Windows '\' and avoids matching "/foo" against "/foobar").
+        let full = Path::new(&k.full_path);
         let best_root: Option<&String> = roots
             .iter()
-            .filter(|r| k.full_path == **r || k.full_path.starts_with(&format!("{}/", r)))
+            .filter(|r| full.starts_with(Path::new(r.as_str())))
             .max_by_key(|r| r.len());
-        let rel = if let Some(root) = best_root {
-            let root_name = Path::new(root).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            let after = k.full_path[root.len()..].trim_start_matches('/');
-            format!("{}/{}", root_name, after)
+        let rel: std::path::PathBuf = if let Some(root) = best_root {
+            let root_name = Path::new(root).file_name().unwrap_or_default();
+            let after = full.strip_prefix(root).unwrap_or(Path::new(&k.name));
+            Path::new(root_name).join(after)
         } else {
-            k.name.clone()
+            std::path::PathBuf::from(&k.name)
         };
         let mut target = Path::new(&dest).join(&rel);
         if let Some(parent) = target.parent() {
