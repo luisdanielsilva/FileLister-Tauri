@@ -1,17 +1,19 @@
-name: Build Installers
+name: Release
 
-# Stage 2 of 2: when a GitHub Release is created, compile the app on macOS and Windows
-# and attach the installers (.dmg, .msi/.exe) to that release.
+# Single-stage release: pushing a version tag (vX.Y.Z) runs the tests, then builds
+# the macOS + Windows installers AND creates the GitHub Release with them attached —
+# all in one run under the built-in token (no RELEASE_PAT needed).
 
 on:
-  release:
-    types: [created]
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  release:
     strategy:
       fail-fast: false
       matrix:
@@ -42,19 +44,24 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      # Gate the release on the test suites — runs on each target OS, so the
-      # Windows path logic is re-checked on Windows. A failure here means no
-      # installer is produced for that platform.
+      # Test gate: a failure here stops the build, so this platform's installer
+      # is never produced. Runs on each OS, re-checking the Windows path logic.
       - name: Frontend tests
         run: npm test
 
       - name: Backend tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 
-      - name: Build the app and upload installers to the release
+      - name: Build installers and publish the release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          releaseId: ${{ github.event.release.id }}
+          tagName: ${{ github.ref_name }}
+          releaseName: ${{ github.ref_name }}
+          releaseBody: "See the assets below to download and install."
+          # Publishes the release as soon as both builds finish. Set to true if
+          # you'd rather review a draft and publish it manually.
+          releaseDraft: false
+          prerelease: false
           args: ${{ matrix.args }}
