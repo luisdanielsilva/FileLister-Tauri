@@ -65,3 +65,25 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+      # Attach a second copy of each installer with a stable, version-less name, so a
+      # website can link to https://github.com/<repo>/releases/latest/download/<name>
+      # and always get the newest version. The versioned originals stay too.
+      - name: Attach stable-named installers for "latest" links
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          attach() {
+            local src
+            src=$(find src-tauri/target -path "*release/bundle/*" -name "$1" 2>/dev/null | head -1)
+            if [ -n "$src" ]; then
+              cp "$src" "$2"
+              gh release upload "$GITHUB_REF_NAME" "$2" --clobber
+              echo "Attached $2 (from $src)"
+            fi
+          }
+          attach "*.dmg"       "FileLister-Tauri-macos.dmg"
+          attach "*-setup.exe" "FileLister-Tauri-windows-setup.exe"
+          attach "*.msi"       "FileLister-Tauri-windows.msi"
