@@ -5,13 +5,14 @@ import { FileGroups } from "./views/FileGroups";
 import { FolderGroups, DiffSheet } from "./views/FolderGroups";
 import { PhotoGroups } from "./views/PhotoGroups";
 import {
-  CleanAllSheet, MergeSheet, MergeAllSheet, PhotoDeleteSheet, LicenseSheet, RegisterAlert,
+  CleanAllSheet, MergeSheet, MergeAllSheet, PhotoDeleteSheet, LicenseSheet, RegisterAlert, FiltersSheet,
 } from "./views/Sheets";
 import { HelpWindow } from "./views/Help";
 import { SettingsWindow, loadPriority } from "./views/Settings";
 import { HistoryWindow } from "./views/History";
 import { Preview } from "./views/Preview";
 import { computeSections, filePaths, folderPaths } from "./sections";
+import { makeScanFilter } from "./scanFilter";
 import "./styles.css";
 
 const MODES = [
@@ -49,6 +50,7 @@ export default function App() {
 
   const [license, setLicense] = useState({ registered: false, name: "Trial Version", trial: 0 });
   const [sizeFilter, setSizeFilter] = useState({ min: "", max: "", unit: "MB" });
+  const [scanFilters, setScanFilters] = useState({ excludeFolders: "", includeExts: "", excludeExts: "" });
   const [potentialSavings, setPotentialSavings] = useState(0);
   const [recovered, setRecovered] = useState(0);
   const [lastLogPath, setLastLogPath] = useState(null);
@@ -99,28 +101,58 @@ export default function App() {
   }, []);
   undoRef.current = undoLast;
 
-  // ── keyboard: ⌘Z / Ctrl+Z undo, Space preview ──
+  // Live snapshot of nav state so the (once-attached) key handler never goes stale.
+  const navRef = useRef({});
+
+  // ── keyboard: ⌘Z undo · Space preview · ↑/↓ move through results ──
   useEffect(() => {
+    const selectionPath = (nav) => {
+      if (nav.mode === "files") return nav.selectedFilePath;
+      if (nav.mode === "photos" && nav.selectedPhotoId) {
+        const p = nav.photoGroups.flatMap((g) => g.photos).find((x) => x.id === nav.selectedPhotoId);
+        return p?.full_path;
+      }
+      return null;
+    };
+    const navigate = (delta) => {
+      const nav = navRef.current;
+      const pick = (list, curId) => {
+        if (!list.length) return null;
+        const i = list.findIndex((x) => x.id === curId);
+        return list[Math.min(Math.max(i < 0 ? 0 : i + delta, 0), list.length - 1)];
+      };
+      if (nav.mode === "files") {
+        const files = nav.fileGroups.flatMap((g) => g.files).filter((f) => !nav.deletedPaths.has(f.full_path));
+        const n = pick(files, nav.selectedFile);
+        if (n) { setSelectedFile(n.id); setSelectedFilePath(n.full_path); if (nav.previewPath) setPreviewPath(n.full_path); }
+      } else if (nav.mode === "folders") {
+        const n = pick(nav.folderGroups, nav.selectedFolderId);
+        if (n) setSelectedFolderId(n.id);
+      } else {
+        const photos = nav.photoGroups.flatMap((g) => g.photos).filter((p) => !nav.deletedPaths.has(p.full_path));
+        const n = pick(photos, nav.selectedPhotoId);
+        if (n) { setSelectedPhotoId(n.id); if (nav.previewPath) setPreviewPath(n.full_path); }
+      }
+    };
     const onKey = (e) => {
       const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName);
+      const nav = navRef.current;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z" && !typing) {
-        e.preventDefault();
-        undoRef.current();
-        return;
+        e.preventDefault(); undoRef.current(); return;
       }
-      if (e.code === "Space" && !typing && !dialog && !walk) {
-        let path = null;
-        if (mode === "files") path = selectedFilePath;
-        else if (mode === "photos" && selectedPhotoId) {
-          const p = photoGroups.flatMap((g) => g.photos).find((x) => x.id === selectedPhotoId);
-          path = p?.full_path;
-        }
+      if (typing || nav.dialog || nav.walk) return;
+      if (e.code === "Space") {
+        const path = selectionPath(nav);
         if (path) { e.preventDefault(); setPreviewPath((cur) => (cur ? null : path)); }
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault(); navigate(1);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault(); navigate(-1);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mode, selectedFilePath, selectedPhotoId, photoGroups, dialog, walk]);
+  }, []);
 
   const unitBytes = { KB: 1024, MB: 1048576, GB: 1073741824 };
   const sizeActive = sizeFilter.min !== "" || sizeFilter.max !== "";
@@ -168,10 +200,37 @@ export default function App() {
       : { criteria, order: "descending" });
   };
 
+  // Global include/exclude rules (the "Filters" popover) — applied post-search to
+  // Files and Photos results, like the original.
+  const filter = makeScanFilter(scanFilters);
+
   let displayedFileGroups = fileGroups;
   if (sizeActive) displayedFileGroups = displayedFileGroups.filter((g) => sizeContains(g.size_bytes));
+  if (filter.isActive) {
+    displayedFileGroups = displayedFileGroups
+      .map((g) => ({ ...g, files: g.files.filter((f) => filter.allows(f.full_path)) }))
+      .filter((g) => g.files.length >= 2);
+  }
   displayedFileGroups = sortGroups(displayedFileGroups, false);
   const displayedFolderGroups = sortGroups(folderGroups, true);
+
+  let displayedPhotoGroups = photoGroups;
+  if (filter.isActive) {
+    displayedPhotoGroups = photoGroups
+      .map((g) => {
+        const photos = g.photos.filter((p) => filter.allows(p.full_path));
+        const keeper_id = photos.some((p) => p.id === g.keeper_id) ? g.keeper_id : photos[0] && photos[0].id;
+        return { ...g, photos, keeper_id };
+      })
+      .filter((g) => g.photos.length >= 2);
+  }
+
+  // Keep the nav snapshot current for the keyboard handler.
+  navRef.current = {
+    mode, deletedPaths,
+    fileGroups: displayedFileGroups, folderGroups: displayedFolderGroups, photoGroups: displayedPhotoGroups,
+    selectedFile, selectedFolderId, selectedPhotoId, dialog, walk, previewPath,
+  };
 
   const activeCount = (g) => g.files.filter((f) => !deletedPaths.has(f.full_path)).length;
   const hasRemovable = displayedFileGroups.some((g) => activeCount(g) > 1);
@@ -352,9 +411,9 @@ export default function App() {
     setDialog({ type: "photoDelete", count: targets.length, bytes, all: false, run: () => doDeletePhotos([group]) });
   };
   const deleteAllPhotos = () => {
-    const targets = photoGroups.flatMap((g) => g.photos.filter((p) => p.id !== g.keeper_id && !deletedPaths.has(p.full_path)));
+    const targets = displayedPhotoGroups.flatMap((g) => g.photos.filter((p) => p.id !== g.keeper_id && !deletedPaths.has(p.full_path)));
     const bytes = targets.reduce((s, p) => s + p.size_bytes, 0);
-    setDialog({ type: "photoDelete", count: targets.length, bytes, all: true, run: () => doDeletePhotos(photoGroups) });
+    setDialog({ type: "photoDelete", count: targets.length, bytes, all: true, run: () => doDeletePhotos(displayedPhotoGroups) });
   };
   const doDeletePhotos = async (groups) => {
     setDialog(null);
@@ -373,7 +432,7 @@ export default function App() {
   const exportKeepers = async () => {
     const dest = await pickDestination();
     if (!dest) return;
-    const keepers = photoGroups.map((g) => g.photos.find((p) => p.id === g.keeper_id)).filter(Boolean);
+    const keepers = displayedPhotoGroups.map((g) => g.photos.find((p) => p.id === g.keeper_id)).filter(Boolean);
     try {
       const res = await api.exportKeepers(keepers, dest, folders);
       if (res.log_path) setLastLogPath(res.log_path);
@@ -461,6 +520,10 @@ export default function App() {
       <div className="options-wrap">
         <div className="opt-row">
           <span className="row-label">OPTIONS</span>
+          <button className={`filter-pill ${filter.isActive ? "active" : ""}`} onClick={() => setDialog({ type: "filters" })}
+            title="Include/exclude folders and extensions (applies to Files & Photos results)">
+            <Icon name="filter" size={11} /> Filters
+          </button>
           {mode === "files" && (
             <>
               <Check label="Deep Scan" icon="shield" checked={fileOpts.deep} disabled={scanning} onChange={(v) => setFileOpts({ ...fileOpts, deep: v })} />
@@ -539,7 +602,7 @@ export default function App() {
                   </button>
                 </>
               )}
-              {mode === "photos" && photoGroups.length > 0 && (
+              {mode === "photos" && displayedPhotoGroups.length > 0 && (
                 <>
                   <button className="action-btn green" onClick={exportKeepers}><Icon name="upload" size={11} /> Copy keepers to…</button>
                   <button className="action-btn red" onClick={deleteAllPhotos}><Icon name="trash" size={11} /> Delete all non-keepers</button>
@@ -565,7 +628,8 @@ export default function App() {
         <Results
           mode={mode} hasResults={hasResults} roots={folders}
           displayedFileGroups={displayedFileGroups} displayedFolderGroups={displayedFolderGroups}
-          photoGroups={photoGroups} fileGroups={fileGroups} folderGroups={folderGroups} sizeActive={sizeActive}
+          photoGroups={displayedPhotoGroups} rawPhotoCount={photoGroups.length}
+          fileGroups={fileGroups} folderGroups={folderGroups} sizeActive={sizeActive} filterActive={filter.isActive}
           deletedPaths={deletedPaths} selectedFile={selectedFile} selectedFolderId={selectedFolderId} selectedPhotoId={selectedPhotoId}
           onSelectFile={selectFile} onDeleteFile={deleteFile} onOpenFolder={(p) => api.openFolder(p)}
           onSelectFolder={setSelectedFolderId} onMergeFolder={onMergeFolder} safeMerge={safeMerge}
@@ -601,6 +665,7 @@ export default function App() {
       {dialog?.type === "photoDelete" && <PhotoDeleteSheet count={dialog.count} bytes={dialog.bytes} all={dialog.all} onConfirm={dialog.run} onCancel={() => setDialog(null)} />}
       {dialog?.type === "license" && <LicenseSheet onValidate={validateLicense} onClose={() => setDialog(null)} registered={license.registered} registeredName={license.name} onDeactivate={deactivate} />}
       {dialog?.type === "register" && <RegisterAlert onClose={() => setDialog(null)} />}
+      {dialog?.type === "filters" && <FiltersSheet value={scanFilters} onChange={setScanFilters} onClose={() => setDialog(null)} />}
       {dialog?.type === "help" && <HelpWindow onClose={() => setDialog(null)} />}
       {dialog?.type === "settings" && <SettingsWindow priority={photoPriority} onChange={setPhotoPriority} onClose={() => setDialog(null)} />}
       {dialog?.type === "history" && <HistoryWindow onClose={() => setDialog(null)} />}
@@ -624,7 +689,7 @@ export default function App() {
 }
 
 function Results(props) {
-  const { mode, hasResults, displayedFileGroups, displayedFolderGroups, photoGroups, fileGroups, folderGroups, sizeActive, barStatus, roots } = props;
+  const { mode, hasResults, displayedFileGroups, displayedFolderGroups, photoGroups, fileGroups, folderGroups, sizeActive, filterActive, rawPhotoCount, barStatus, roots } = props;
   const [collapsed, setCollapsed] = useState(new Set());
 
   if (!hasResults) {
@@ -654,12 +719,12 @@ function Results(props) {
     <div className="results">
       <div className="results-header">
         <span className="title">
-          {mode === "files" && `Duplicate Groups found (${sizeActive ? `${displayedFileGroups.length} of ${fileGroups.length}` : displayedFileGroups.length}):`}
+          {mode === "files" && `Duplicate Groups found (${(sizeActive || filterActive) ? `${displayedFileGroups.length} of ${fileGroups.length}` : displayedFileGroups.length}):`}
           {mode === "folders" && `Duplicate folder clusters (${folderGroups.length}):`}
-          {mode === "photos" && `Similar photo groups (${photoGroups.length}):`}
+          {mode === "photos" && `Similar photo groups (${filterActive ? `${photoGroups.length} of ${rawPhotoCount}` : photoGroups.length}):`}
         </span>
         <span className="spacer" />
-        {mode !== "photos" && <span className="badge-space">Space to preview</span>}
+        <span className="badge-space">↑↓ move{mode !== "folders" ? " · Space preview" : ""}</span>
         {mode === "files" && <span className="badge-lock"><Icon name="lock" size={9} /> Safety Lock Active</span>}
       </div>
 

@@ -328,6 +328,10 @@ button { font-family: inherit; cursor: default; }
   border: 1px solid var(--border); border-radius: 6px; background: var(--control-bg); color: var(--text);
   text-align: center; letter-spacing: 1px;
 }
+
+.filter-field { margin: 12px 0; text-align: left; }
+.filter-field label { display: block; font-size: 11px; font-weight: 600; color: var(--secondary); margin-bottom: 4px; }
+.filter-field input[type=text] { text-align: left; letter-spacing: normal; font-family: inherit; font-size: 12px; }
 .btn-primary { border: none; background: var(--blue); color: #fff; font-weight: 600; padding: 7px 16px; border-radius: 7px; font-size: 13px; }
 .btn-primary.danger { background: var(--red); }
 .btn-primary.indigo { background: var(--indigo); }

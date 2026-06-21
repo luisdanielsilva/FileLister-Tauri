@@ -125,6 +125,37 @@ export function LicenseSheet({ onValidate, onClose, registered, registeredName, 
   );
 }
 
+export function FiltersSheet({ value, onChange, onClose }) {
+  const active = value.excludeFolders || value.includeExts || value.excludeExts;
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Search Filters</h2>
+        <p>Applied instantly to your Files and Photos results. Session-only — separate entries with commas.</p>
+        <div className="filter-field">
+          <label>Exclude folders (by name, anywhere in the path)</label>
+          <input type="text" placeholder="node_modules, .git, Backups" value={value.excludeFolders}
+            onChange={(e) => onChange({ ...value, excludeFolders: e.target.value })} />
+        </div>
+        <div className="filter-field">
+          <label>Include only these extensions <span style={{ fontWeight: 400 }}>(blank = all)</span></label>
+          <input type="text" placeholder="jpg, png, pdf" value={value.includeExts}
+            onChange={(e) => onChange({ ...value, includeExts: e.target.value })} />
+        </div>
+        <div className="filter-field">
+          <label>Exclude these extensions</label>
+          <input type="text" placeholder="tmp, log, ds_store" value={value.excludeExts}
+            onChange={(e) => onChange({ ...value, excludeExts: e.target.value })} />
+        </div>
+        <div className="sheet-row">
+          <button className="btn-secondary" disabled={!active} onClick={() => onChange({ excludeFolders: "", includeExts: "", excludeExts: "" })}>Clear</button>
+          <button className="btn-primary" onClick={onClose}>Done</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function RegisterAlert({ onClose }) {
   return (
     <div className="overlay" onClick={onClose}>
