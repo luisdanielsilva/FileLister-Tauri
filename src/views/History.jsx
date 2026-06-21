@@ -72,6 +72,7 @@ export function HistoryWindow({ onClose }) {
                 <div style={{ fontSize: 12, color: "var(--secondary)" }}>{new Date(current.report.timestamp).toLocaleString()} · v{current.report.app_version}</div>
                 <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                   <button className="btn-bordered" onClick={() => api.openFolder(current.json_path.replace(/\.json$/, ".html"))}><Icon name="reveal" size={11} /> Open HTML</button>
+                  <button className="btn-bordered" onClick={() => api.openFolder(current.json_path.replace(/\.json$/, ".pdf"))}><Icon name="doc" size={11} /> Open PDF</button>
                   <button className="btn-bordered" onClick={() => api.revealInFinder(current.json_path)}><Icon name="folder" size={11} /> Reveal</button>
                   <span style={{ flex: 1 }} />
                   <button className="btn-bordered" onClick={onClose}>Close</button>

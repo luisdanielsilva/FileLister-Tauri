@@ -86,7 +86,123 @@ pub fn write_to(report: &LogReport, dir: &std::path::Path) -> Option<String> {
     let html_path = dir.join(format!("{}.html", base));
     fs::write(&html_path, render_html(report)).ok();
 
+    let pdf_path = dir.join(format!("{}.pdf", base));
+    render_pdf(report, &pdf_path);
+
     Some(json_path.to_string_lossy().to_string())
+}
+
+// (moved/copied, removed, bytes removed, errors)
+fn summary(report: &LogReport) -> (usize, usize, u64, usize) {
+    let mut moved = 0;
+    let mut removed = 0;
+    let mut bytes = 0u64;
+    let mut errors = 0;
+    for c in &report.clusters {
+        for e in &c.entries {
+            if e.action.starts_with("MOVED") || (e.action.starts_with("COPIED") && e.action != "FOLDER_COPIED") {
+                moved += 1;
+            }
+            if e.action == "TRASHED" {
+                removed += 1;
+                bytes += e.size_bytes;
+            }
+            if e.action == "ERROR" {
+                errors += 1;
+            }
+        }
+    }
+    (moved, removed, bytes, errors)
+}
+
+fn trunc(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(n - 1).collect::<String>())
+    }
+}
+
+// Renders the report to a paginated A4 PDF — written by hand (no dependency) using
+// the base-14 Helvetica fonts, which need no embedding. Best-effort.
+fn render_pdf(report: &LogReport, path: &std::path::Path) -> Option<()> {
+    // (text, size_pt, bold). Restricted to ASCII so byte offsets == char offsets.
+    let ascii = |s: &str| -> String {
+        s.replace('·', "-").replace('…', "...").replace('—', "-")
+            .chars().map(|c| if c.is_ascii() { c } else { '?' }).collect()
+    };
+    let mut lines: Vec<(String, u32, bool)> = vec![
+        ("FileLister - Operation Log".into(), 16, true),
+        (ascii(&format!("{}  ·  {}  ·  v{}", report.timestamp, report.mode, report.app_version)), 9, false),
+    ];
+    let (moved, removed, bytes, errors) = summary(report);
+    lines.push((ascii(&format!("Summary: {} cluster(s) · {} moved/copied · {} removed · {} reclaimed · {} error(s)",
+        report.clusters.len(), moved, removed, byte_string(bytes), errors)), 9, false));
+    lines.push((String::new(), 4, false));
+    for c in &report.clusters {
+        lines.push((ascii(&trunc(&c.result_name, 95)), 12, true));
+        for e in &c.entries {
+            lines.push((ascii(&trunc(&format!("[{}] {}  ·  {}", e.action, e.file_name, byte_string(e.size_bytes)), 98)), 9, false));
+            lines.push((ascii(&trunc(&format!("     from: {}", e.source_path), 100)), 8, false));
+            if !e.destination_path.is_empty() {
+                lines.push((ascii(&trunc(&format!("     to:   {}", e.destination_path), 100)), 8, false));
+            }
+        }
+        lines.push((String::new(), 5, false));
+    }
+
+    // Paginate into content streams (PDF coords: origin bottom-left, y up; A4 = 595x842pt).
+    let (left, top, bottom) = (50.0f64, 800.0f64, 40.0f64);
+    let mut pages: Vec<String> = Vec::new();
+    let mut cur = String::from("BT\n");
+    let mut y = top;
+    for (text, size, bold) in &lines {
+        let dy = *size as f64 * 1.3 + 2.0;
+        if y - dy < bottom {
+            cur.push_str("ET\n");
+            pages.push(std::mem::take(&mut cur));
+            cur.push_str("BT\n");
+            y = top;
+        }
+        if !text.is_empty() {
+            let esc = text.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)");
+            let f = if *bold { "F2" } else { "F1" };
+            cur.push_str(&format!("/{} {} Tf\n1 0 0 1 {:.1} {:.1} Tm\n({}) Tj\n", f, size, left, y, esc));
+        }
+        y -= dy;
+    }
+    cur.push_str("ET\n");
+    pages.push(cur);
+
+    // Objects: 1 catalog, 2 pages, 3 F1, 4 F2, then per page (page obj, content obj).
+    let n_pages = pages.len();
+    let total = 4 + n_pages * 2;
+    let mut bodies = vec![String::new(); total + 1];
+    let kids: Vec<String> = (0..n_pages).map(|i| format!("{} 0 R", 5 + i * 2)).collect();
+    bodies[1] = "<< /Type /Catalog /Pages 2 0 R >>".into();
+    bodies[2] = format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), n_pages);
+    bodies[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into();
+    bodies[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>".into();
+    for (i, content) in pages.iter().enumerate() {
+        bodies[5 + i * 2] = format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents {} 0 R >>", 6 + i * 2);
+        bodies[6 + i * 2] = format!("<< /Length {} >>\nstream\n{}\nendstream", content.len(), content);
+    }
+
+    let mut out = String::from("%PDF-1.4\n");
+    let mut offsets = vec![0usize; total + 1];
+    for num in 1..=total {
+        offsets[num] = out.len();
+        out.push_str(&format!("{} 0 obj\n{}\nendobj\n", num, bodies[num]));
+    }
+    let xref_off = out.len();
+    out.push_str(&format!("xref\n0 {}\n0000000000 65535 f \n", total + 1));
+    for num in 1..=total {
+        out.push_str(&format!("{:010} 00000 n \n", offsets[num]));
+    }
+    out.push_str(&format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n", total + 1, xref_off));
+
+    fs::write(path, out).ok()?;
+    Some(())
 }
 
 pub fn list() -> Vec<(String, LogReport)> {
@@ -136,6 +252,12 @@ mod tests {
         let json_path = write_to(&report, &dir).expect("write");
         assert!(json_path.ends_with(".json"));
         assert!(std::path::Path::new(&json_path.replace(".json", ".html")).exists(), "HTML log written");
+
+        // PDF written and structurally valid (header + EOF marker).
+        let pdf_path = json_path.replace(".json", ".pdf");
+        let pdf = std::fs::read(&pdf_path).expect("PDF log written");
+        assert!(pdf.starts_with(b"%PDF-1."), "valid PDF header");
+        assert!(pdf.ends_with(b"%%EOF\n"), "valid PDF trailer");
 
         let listed = list_in(&dir);
         assert_eq!(listed.len(), 1);
