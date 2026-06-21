@@ -1,4 +1,4 @@
-import { baseName, isUnder } from "./api";
+import { baseName, isUnder } from "./paths";
 
 const ACROSS = "__across__";
 

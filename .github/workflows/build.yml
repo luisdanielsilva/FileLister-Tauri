@@ -42,6 +42,15 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
+      # Gate the release on the test suites — runs on each target OS, so the
+      # Windows path logic is re-checked on Windows. A failure here means no
+      # installer is produced for that platform.
+      - name: Frontend tests
+        run: npm test
+
+      - name: Backend tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
       - name: Build the app and upload installers to the release
         uses: tauri-apps/tauri-action@v0
         env:
